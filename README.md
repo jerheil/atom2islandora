@@ -37,10 +37,13 @@ Use the Clipboard feature in AtoM to select the Items or Files to be ingested in
 
 ### Run atom2islandora
 
-5) FOR WINDOWS USERS: Double-click on a2i.bat. For Mac or Linux users, run atom2islandora.py through the command line - 'py atom2islandora.py'
-6) Follow the prompt to input the parent id in Islandora.
-7) The program with produce three files:
+5) FOR WINDOWS USERS: Double-click on a2i.bat. For Mac or Linux users, run atom2islandora.py through the command line
+```
+   py atom2islandora.py
+```
+7) Follow the prompt to input the parent id in Islandora.
+8) The program with produce three files:
     a) source1.csv - this is condensed from the exported file from AtoM and can be deleted
     b) product.csv - this is the main product for ingest into Islandora
     c) error.txt - this reports on any issues you may need to address in product.csv before ingest
-8) Rename product.csv to a name you'd like to use for the ingest.
+9) Rename product.csv to a name you'd like to use for the ingest.
