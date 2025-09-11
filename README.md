@@ -30,7 +30,10 @@ Use the Clipboard feature in AtoM to select the Items or Files to be ingested in
 
 ### Run ExifTool on digital objects to be ingested
 
-4) Run ExifTool 'exiftool.exe -csv -r -SourceFile -Title -FileName -FileCreateDate -PageCount -FileTypeExtension -MIMEType -LayerCount * > "folder\source2.csv"' - swap out "folder" in the pathway for the folder containing atom2islandora.py
+4) Run ExifTool - swap out "folder" in the pathway for the folder containing atom2islandora.py
+```
+   exiftool.exe -csv -r -SourceFile -Title -FileName -FileCreateDate -PageCount -FileTypeExtension -MIMEType -LayerCount * > "folder\source2.csv"
+```
 
 ### Run atom2islandora
 
