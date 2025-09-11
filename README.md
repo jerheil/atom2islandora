@@ -17,7 +17,7 @@ Install ExifTool. See [ExifTool](https://exiftool.org/) for instructions.
 
 ### Download atom2islandora.py
 
-Create a folder on your computer (Desktop or wherever). Save the [atom2islandora.py]() file to a folder on your computer. FOR WINDOWS USERS: Save the [a2i.bat]() file to the same folder
+Create a folder on your computer (Desktop or wherever). Save the [atom2islandora.py](https://github.com/jerheil/atom2islandora/blob/main/atom2islandora.py) file to a folder on your computer. FOR WINDOWS USERS: Save the [a2i.bat](https://github.com/jerheil/atom2islandora/blob/main/a2i.bat) file to the same folder
 
 ## Use
 
