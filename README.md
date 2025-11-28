@@ -15,11 +15,25 @@ Install Python. See [Python downloads](https://www.python.org/downloads/) for in
 
 Install ExifTool. See [ExifTool](https://exiftool.org/) for instructions.
 
+### Install ffmpeg (optional)
+
+Install ffmpeg. See [ffmpeg](https://www.ffmpeg.org/) for instructions.
+
 ### Download atom2islandora.py
 
 Create a folder on your computer (Desktop or wherever). Save the [atom2islandora.py](https://github.com/jerheil/atom2islandora/blob/main/atom2islandora.py) file to a folder on your computer. FOR WINDOWS USERS: Save the [a2i.bat](https://github.com/jerheil/atom2islandora/blob/main/a2i.bat) file to the same folder
 
+### Download convert_wav_to_mp3.bat
+
+FOR WINDOWS USERS: Save the [convert_wav_to_mp3.bat](https://github.com/jerheil/atom2islandora/blob/main/convert_wav_to_mp3.bat) to an accessible folder on your computer.
+
 ## Use
+
+### Create Access Derivatives (FOR WINDOWS USERS)
+
+#### Audio
+1) Ensure ffmpeg is installed and accessible through the path to access the program
+2) Run convert_wav_to_mp3.bat 
 
 ### Archives
 
