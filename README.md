@@ -1,5 +1,5 @@
 # atom2islandora
-Version 1.0
+Version 1.1
 
 ## Purpose
 
@@ -13,7 +13,7 @@ Install Python. See [Python downloads](https://www.python.org/downloads/) for in
 
 ### Install ExifTool
 
-Install ExifTool. See [ExifTool](https://exiftool.org/) for instructions.
+Install ExifTool. See [ExifTool](https://exiftool.org/) for instructions. The script anticipates exigtool.exe is located at "C:\Windows\exiftool.exe" - change line 17 of the script if this is not the case.
 
 ### Install ffmpeg (optional)
 
@@ -63,7 +63,7 @@ Use the Clipboard feature in AtoM to select the Items or Files to be ingested in
 #### Prepare metadata
 
 1) Create a folder with the following files:
-   a) source1.csv
+   a) source1.csv (the original DBText csv, exported as UTF-8)
    b) source2.csv
 
 #### Run atom2islandora
