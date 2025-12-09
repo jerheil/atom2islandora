@@ -84,21 +84,67 @@ def sr_mi_dot_match(phys_obj_loc, source2_mapping):
                 return source2_mapping[key]
     return None
 
-def find_best_source2_match(phys_obj_loc, source2_mapping):
-    if (phys_obj_loc.startswith("SR ") or phys_obj_loc.startswith("MI ")) and "." in phys_obj_loc:
-        srmi_match = sr_mi_dot_match(phys_obj_loc, source2_mapping)
-        if srmi_match:
-            return srmi_match
-    norm_loc = normalize_location(phys_obj_loc)
-    for key in source2_mapping:
-        norm_key = normalize_sourcefile(re.sub(r'(?<=\d)_(?=\d)', '.', key))
-        if norm_loc == norm_key:
-            return source2_mapping[key]
-        if norm_loc.replace(" ", "") == norm_key:
-            return source2_mapping[key]
-        if norm_loc in norm_key or norm_key in norm_loc:
-            return source2_mapping[key]
-    return None
+def normalize_audio_shelf(shelf_locator):
+    # Normalize: remove spaces and dots, replace dot with underscore
+    # E.g., "SR 1267.435" -> "SR1267_435"
+    return shelf_locator.replace(" ", "").replace(".", "_")
+
+def extract_side_label(sourcefile, normalized_audio_prefix):
+    # Extract SideLabel, e.g. "SideA", "SideB", "Side1", "Side2", "Tape1" etc. from SourceFile after the shelf locator
+    # Example: SR1267_435-PhilBrown-CFRCReminiscences1-SideA.mp3 -> "SideA"
+    if not sourcefile:
+        return ""
+    base = os.path.splitext(os.path.basename(sourcefile))[0]
+    # attempt pattern: prefix-...-SideA
+    pattern = rf"{re.escape(normalized_audio_prefix)}[-_][^-_]*[-_](Side[A-Za-z0-9]+)$"
+    match = re.search(pattern, base, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    # fallback: common endings
+    for label in ["SideA", "SideB", "Side1", "Side2"] + [f"Tape{i}" for i in range(1, 11)]:
+        if base.lower().endswith(label.lower()):
+            return base[-len(label):]
+    # final fallback: return substring after prefix if present
+    pref_pattern = rf"^{re.escape(normalized_audio_prefix)}[-_]*"
+    after_prefix = re.sub(pref_pattern, "", base, flags=re.IGNORECASE)
+    if after_prefix:
+        after_prefix = after_prefix.lstrip("-_")
+        return after_prefix
+    return ""
+
+def is_compound(row, source2_mapping):
+    """
+    Detect image/audio children for a given source1 row by scanning source2 mapping.
+    Returns (image_children_list, audio_children_list).
+    """
+    phys_obj_loc = (row.get('physicalObjectLocation') or '').strip()
+    shelf_locator = (row.get('physicalObjectLocation') or row.get('shelf_locator') or row.get('shelfLocator') or '').strip()
+    norm_phys_obj_loc = phys_obj_loc.replace(".", "_").replace(" ", "")
+    norm_shelf_locator = normalize_audio_shelf(shelf_locator)
+
+    image_children = []
+    audio_children = []
+    seen_rows = set()
+    for s2key, s2row in source2_mapping.items():
+        # s2key may be full path or filename; get basename without extension
+        cand = os.path.splitext(os.path.basename(s2key))[0]
+        if cand.lower().startswith((norm_phys_obj_loc + "-").lower()) or cand.lower().startswith((norm_phys_obj_loc + "_").lower()):
+            if id(s2row) not in seen_rows:
+                seen_rows.add(id(s2row))
+                mt = s2row.get('MIMEType', '').lower()
+                if mt.startswith('image/'):
+                    image_children.append(s2row)
+                elif mt.startswith('audio/'):
+                    audio_children.append(s2row)
+        elif cand.lower().startswith((norm_shelf_locator + "-").lower()) or cand.lower().startswith((norm_shelf_locator + "_").lower()):
+            if id(s2row) not in seen_rows:
+                seen_rows.add(id(s2row))
+                mt = s2row.get('MIMEType', '').lower()
+                if mt.startswith('image/'):
+                    image_children.append(s2row)
+                elif mt.startswith('audio/'):
+                    audio_children.append(s2row)
+    return (image_children, audio_children)
 
 def reformat_extent_and_medium(extent_and_medium):
     if not extent_and_medium:
@@ -111,6 +157,8 @@ def reformat_extent_and_medium(extent_and_medium):
     return ', '.join(parts)
 
 def get_model_and_resource_type(mime):
+    if not mime:
+        return ("Other", "Other")
     if mime.startswith("audio/"):
         return ("Audio", "Sound")
     elif mime.startswith("video/"):
@@ -126,7 +174,7 @@ def write_error_report(error_rows, blank_rows, error_path, product_header):
     with open(error_path, 'w', encoding='utf-8') as ef:
         ef.write("Rows from source1.csv that could not be matched to source2.csv:\n")
         for err in error_rows:
-            ef.write(f"Row {err['rownum']}: referenceCode={err.get('referenceCode', '')}, physicalObjectLocation={err.get('physicalObjectLocation', '')}, title={err.get('title','')}\n")
+            ef.write(f"Row {err.get('rownum','?')}: referenceCode={err.get('referenceCode', '')}, physicalObjectLocation={err.get('physicalObjectLocation', '')}, title={err.get('title','')}\n")
         ef.write("\nRows in product.csv with blank fields:\n")
         for blank in blank_rows:
             vals = dict(zip(product_header, blank['values']))
@@ -136,6 +184,105 @@ def write_error_report(error_rows, blank_rows, error_path, product_header):
             if (not member_of_existing_entity_id and not member_of) or (member_of_existing_entity_id and member_of):
                 ef.write(f"Row {blank['rownum']} is missing fields: {', '.join(blank['fields'])}\n")
                 ef.write(f"Values: {vals}\n")
+
+def _normalize_for_matching(s):
+    if not s:
+        return []
+    s = s.lower()
+    variants = []
+    no_space = re.sub(r"\s+", "", s)
+    variants.append(no_space)
+    variants.append(no_space.replace(".", "_"))
+    variants.append(no_space.replace("_", "."))
+    variants.append(re.sub(r"[._\-]", "", no_space))
+    digits_dot = re.sub(r"(?<=\d)_(?=\d)", ".", no_space)
+    variants.append(digits_dot)
+    # unique preserve order
+    uniq = []
+    for v in variants:
+        if v and v not in uniq:
+            uniq.append(v)
+    return uniq
+
+def find_best_direct_matches(phys_obj_loc, shelf_locator, source2_mapping):
+    """
+    Broad matching logic:
+    Returns (best_image_row, best_audio_row) or (None, None)
+    """
+    phys_variants = _normalize_for_matching(phys_obj_loc)
+    shelf_variants = _normalize_for_matching(shelf_locator)
+
+    # Unique rows to check
+    rows_to_check = list({id(v): v for v in source2_mapping.values()}.values())
+
+    best_image = None
+    best_audio = None
+
+    # helper to produce candidate basenames and compact form
+    def cand_forms(row):
+        candidates = []
+        sf = row.get('SourceFile') or ""
+        fn = row.get('FileName') or ""
+        if sf:
+            candidates.append(os.path.splitext(os.path.basename(sf))[0])
+        if fn:
+            candidates.append(os.path.splitext(os.path.basename(fn))[0])
+        # dedupe
+        seen = []
+        for c in candidates:
+            if c and c not in seen:
+                seen.append(c)
+        return seen
+
+    # Pass 1: exact normalized equality
+    for row in rows_to_check:
+        for cand in cand_forms(row):
+            cand_compact = re.sub(r"[._\-]", "", cand).lower()
+            for var in phys_variants + shelf_variants:
+                if re.sub(r"[._\-]", "", var).lower() == cand_compact:
+                    mt = (row.get('MIMEType') or '').lower()
+                    if mt.startswith('image/') and not best_image:
+                        best_image = row
+                    elif mt.startswith('audio/') and not best_audio:
+                        best_audio = row
+            if best_image and best_audio:
+                return (best_image, best_audio)
+
+    # Pass 2: startswith (permissive)
+    for row in rows_to_check:
+        for cand in cand_forms(row):
+            cand_low = cand.lower()
+            cand_compact = re.sub(r"[._\-]", "", cand_low)
+            for var in phys_variants + shelf_variants:
+                v = var.lower()
+                v_compact = re.sub(r"[._\-]", "", v)
+                if cand_low.startswith(v) or v.startswith(cand_low) or cand_compact.startswith(v_compact) or v_compact.startswith(cand_compact):
+                    mt = (row.get('MIMEType') or '').lower()
+                    if mt.startswith('image/') and not best_image:
+                        best_image = row
+                    elif mt.startswith('audio/') and not best_audio:
+                        best_audio = row
+            if best_image and best_audio:
+                return (best_image, best_audio)
+
+    # Pass 3: substring
+    for row in rows_to_check:
+        for cand in cand_forms(row):
+            cand_low = cand.lower()
+            cand_compact = re.sub(r"[._\-]", "", cand_low)
+            for var in phys_variants + shelf_variants:
+                v = var.lower()
+                v_compact = re.sub(r"[._\-]", "", v)
+                if v in cand_low or cand_low in v or v_compact in cand_compact or cand_compact in v_compact:
+                    mt = (row.get('MIMEType') or '').lower()
+                    if mt.startswith('image/') and not best_image:
+                        best_image = row
+                    elif mt.startswith('audio/') and not best_audio:
+                        best_audio = row
+        if best_image and best_audio:
+            break
+
+    return (best_image, best_audio)
 
 def source1_to_product(source1_path, source2_mapping, output_path, member_of_existing_entity_id, error_path):
     import csv, re
@@ -155,49 +302,43 @@ def source1_to_product(source1_path, source2_mapping, output_path, member_of_exi
         print(f"Please enter the Authorized form of name for all records ({'organizations' if is_corporate else 'persons'}):")
         uniform_authorized_name = input().strip()
 
-    # Set header accordingly
     header = [
         'ID', 'member_of_existing_entity_id', 'member_of', 'model', 'digital_file', 'mime', 'title', 'resource_type',
         'language', 'local_identifier',
         'organizations' if is_corporate else 'persons',
         'description', 'origin_information', 'extent',
-        'physical_location', 'shelf_locator'
+        'physical_location', 'shelf_locator', 'location_url'
     ]
 
     error_rows = []
     blank_rows = []
-    collections_by_id = set()  # Track legacyId for all collections
+    collections_by_id = set()
+    written_ids = set()
+    next_compound_child_id = 1
 
-    relator_map = {
-        'Creation': 'cre',
-        'Receipt': 'rcp',
-        'Collection': 'col',
-        'Accumulation': 'col',
-        'Production': 'pro',
-        'Published': 'pbl',
-        'Publisher': 'pbl',
-        'Interview': 'ivr',
-        'Custody': 'col',
-        'Performance': 'prf'
-    }
+    def get_next_child_id():
+        nonlocal next_compound_child_id
+        v = next_compound_child_id
+        next_compound_child_id += 1
+        return str(v)
 
-    with open(source1_path, newline='', encoding='utf-8') as f1, \
-         open(output_path, 'w', newline='', encoding='utf-8') as outf:
-
+    with open(source1_path, newline='', encoding='utf-8') as f1:
         reader = csv.DictReader(f1)
+        source1_rows = list(reader)
+
+    with open(output_path, 'w', newline='', encoding='utf-8') as outf:
         writer = csv.writer(outf)
         writer.writerow(header)
-        rows = list(reader)
 
-        for idx, row in enumerate(rows):
-            legacy_id = row.get('legacyId', '').strip()
-            parent_id = row.get('parentId', '').strip()
-            level = row.get('levelOfDescription', '').strip()
-            title = row.get('title', '').strip()
-            phys_obj_loc = row.get('physicalObjectLocation', '').strip()
+        # Pass 1: Write compound parents and their children
+        for idx, row in enumerate(source1_rows):
+            source1_id = row.get('legacyId', '').strip() or row.get('ID', '').strip() or str(idx + 1)
+            phys_obj_loc = (row.get('physicalObjectLocation') or '').strip()
+            shelf_locator = (row.get('physicalObjectLocation') or row.get('shelf_locator') or row.get('shelfLocator') or '').strip()
+            title = (row.get('title') or '').strip()
             language = 'English'
             local_identifier = row.get('referenceCode', '')
-            event_actors = row.get('eventActors', '').strip()
+            event_actors = (row.get('eventActors') or '').strip()
             other_persons = (
                 row.get('radTitleStatementOfResponsibility', '') or
                 row.get('radTitleStatementOfResponsibilityNote', '') or
@@ -206,39 +347,15 @@ def source1_to_product(source1_path, source2_mapping, output_path, member_of_exi
                 ''
             ).strip()
 
-            # Compose persons/organizations field
             field_val = ""
             if event_actors and other_persons:
                 field_val = f"{event_actors}; {other_persons}"
             else:
                 field_val = event_actors or other_persons
-
-            # Prompt to copy Authorized form of name if empty or NULL
             if not field_val or field_val.upper() == "NULL":
-                if uniform_authorized_name:
-                    field_val = uniform_authorized_name
-                else:
-                    print(f"\nRow {idx+2}: The {('organizations' if is_corporate else 'persons')} field is empty or NULL for record '{title}'.")
-                    print("Please copy the 'Authorized form of name' from AtoM to populate this field (or press Enter to leave blank):")
-                    field_val = input().strip()
-
-            # Append relator code(s) based on eventType field
-            event_types = row.get('eventTypes', '')
-            relators = []
-            for et in re.split(r'\s*[|;,]\s*', event_types):
-                et = et.strip()
-                if et:
-                    relator = relator_map.get(et, 'oth')
-                    relators.append(relator)
-            relator_str = '|relators:' + ",".join(relators) if relators else ''
-
-            if field_val:
-                # Add the relator string after each entry, separated by "; " if multiple entries
-                field_entries = [entry.strip() for entry in field_val.split(';') if entry.strip()]
-                field_val = "; ".join(f"{entry}{relator_str}" for entry in field_entries)
+                field_val = uniform_authorized_name if uniform_authorized_name else field_val
 
             description = row.get('scopeAndContent', '')
-
             event_start = row.get('eventStartDates', '').strip()
             event_end = row.get('eventEndDates', '').strip()
             if event_start and event_end:
@@ -255,85 +372,135 @@ def source1_to_product(source1_path, source2_mapping, output_path, member_of_exi
 
             extent = reformat_extent_and_medium(row.get('extentAndMedium', ''))
             physical_location = row.get('repository', '')
-            shelf_locator = row.get('physicalObjectLocation', '')
+            slug = row.get('slug', '').strip()
+            location_url = f"https://db-archives.library.queensu.ca/{slug}" if slug else ""
 
-            if phys_obj_loc and (phys_obj_loc.startswith("V") or phys_obj_loc.startswith("MI") or phys_obj_loc.startswith("SR")):
-                if title:
-                    title = f"{title} - {phys_obj_loc}"
+            image_children, audio_children = is_compound(row, source2_mapping)
+
+            if audio_children:
+                written_ids.add(source1_id)
+                compound_title = f"{title} - {shelf_locator}" if shelf_locator else title
+                compound_row = [
+                    source1_id, member_of_existing_entity_id, '', 'Compound', '', '', compound_title, 'Sound',
+                    language, local_identifier, field_val, description, origin_information, extent, physical_location, shelf_locator, location_url
+                ]
+                writer.writerow(compound_row)
+                for m in audio_children:
+                    child_id = get_next_child_id()
+                    norm_shelf_locator = normalize_audio_shelf(shelf_locator)
+                    side_label = extract_side_label(m.get('SourceFile') or m.get('FileName',''), norm_shelf_locator)
+                    child_title = f"{title} - {shelf_locator}-{side_label}" if side_label else f"{title} - {shelf_locator}"
+                    child_row = [
+                        child_id, '', source1_id, 'Audio',
+                        f"repo-ingest://archives/{m.get('FileName', m.get('SourceFile',''))}", m.get('MIMEType', ''),
+                        child_title, 'Sound', '', '', '', '', '', '', '', '', location_url
+                    ]
+                    writer.writerow(child_row)
+
+            if image_children:
+                written_ids.add(source1_id)
+                compound_title = f"{title} - {phys_obj_loc}" if phys_obj_loc else title
+                compound_row = [
+                    source1_id, member_of_existing_entity_id, '', 'Compound', '', '', compound_title, 'Image',
+                    language, local_identifier, field_val, description, origin_information, extent, physical_location, phys_obj_loc, location_url
+                ]
+                writer.writerow(compound_row)
+                for m in image_children:
+                    child_id = get_next_child_id()
+                    child_title = f"{title} - {os.path.splitext(m.get('SourceFile',''))[0]}" if m.get('SourceFile') else f"{title}"
+                    child_row = [
+                        child_id, '', source1_id, 'Image', f"repo-ingest://archives/{m.get('FileName', m.get('SourceFile',''))}", m.get('MIMEType', ''),
+                        child_title, 'Image', '', '', '', '', '', '', '', '', location_url
+                    ]
+                    writer.writerow(child_row)
+
+        # Pass 2: write remaining individual items (non-compound)
+        for idx, row in enumerate(source1_rows):
+            source1_id = row.get('legacyId', '').strip() or row.get('ID', '').strip() or str(idx + 1)
+            if source1_id in written_ids:
+                continue
+            phys_obj_loc = (row.get('physicalObjectLocation') or '').strip()
+            shelf_locator = (row.get('physicalObjectLocation') or row.get('shelf_locator') or row.get('shelfLocator') or '').strip()
+            title = (row.get('title') or '').strip()
+            language = 'English'
+            local_identifier = row.get('referenceCode', '')
+            event_actors = (row.get('eventActors') or '').strip()
+            other_persons = (
+                row.get('radTitleStatementOfResponsibility', '') or
+                row.get('radTitleStatementOfResponsibilityNote', '') or
+                row.get('radTitleAttributionsAndConjectures', '') or
+                row.get('radNoteAccompanyingMaterial', '') or
+                ''
+            ).strip()
+
+            field_val = ""
+            if event_actors and other_persons:
+                field_val = f"{event_actors}; {other_persons}"
+            else:
+                field_val = event_actors or other_persons
+            if not field_val or field_val.upper() == "NULL":
+                field_val = uniform_authorized_name if uniform_authorized_name else field_val
+
+            description = row.get('scopeAndContent', '')
+            event_start = row.get('eventStartDates', '').strip()
+            event_end = row.get('eventEndDates', '').strip()
+            if event_start and event_end:
+                if event_start == event_end:
+                    origin_information = event_start
                 else:
-                    title = phys_obj_loc
+                    origin_information = f"{event_start}/{event_end}" if event_end else event_start
+            elif event_start:
+                origin_information = event_start
+            elif event_end:
+                origin_information = event_end
+            else:
+                origin_information = ""
 
-            is_collection = False
-            model = None
-            resource_type = None
-            digital_file = ""
-            mime = ""
-            member_of = ""
-            member_of_existing_entity_id_val = ""
+            extent = reformat_extent_and_medium(row.get('extentAndMedium', ''))
+            physical_location = row.get('repository', '')
+            slug = row.get('slug', '').strip()
+            location_url = f"https://db-archives.library.queensu.ca/{slug}" if slug else ""
 
-            if level and level not in ["File", "Item"]:
-                print(f"\nRow {idx+2}: levelOfDescription is '{level}'. Treat as collection? (y/n)")
-                print(f"Title: {title}")
-                answer = input().strip().lower()
-                if answer == "y":
-                    is_collection = True
-                    model = "Collection"
-                    resource_type = "Collection"
-                    digital_file = ""
-                    mime = ""
-                    member_of_existing_entity_id_val = member_of_existing_entity_id
-                    member_of = ""
-                    collections_by_id.add(legacy_id)
+            # Try to find direct image/audio matches using broadened matching
+            direct_image, direct_audio = find_best_direct_matches(phys_obj_loc, shelf_locator, source2_mapping)
 
-            if not is_collection:
-                source2_row = find_best_source2_match(phys_obj_loc, source2_mapping)
-                if not source2_row:
-                    err = {
-                        'rownum': idx+2,
-                        'referenceCode': row.get('referenceCode', ''),
-                        'physicalObjectLocation': phys_obj_loc,
-                        'title': title
-                    }
-                    error_rows.append(err)
-                    continue
+            if direct_audio:
+                norm_shelf_locator = normalize_audio_shelf(shelf_locator)
+                side_label = extract_side_label(direct_audio.get('SourceFile') or direct_audio.get('FileName',''), norm_shelf_locator)
+                item_title = f"{title} - {shelf_locator}-{side_label}" if side_label else f"{title} - {shelf_locator}" if shelf_locator else title
+                image_row = [
+                    source1_id, member_of_existing_entity_id, '', 'Audio',
+                    f"repo-ingest://archives/{direct_audio.get('FileName', direct_audio.get('SourceFile',''))}", direct_audio.get('MIMEType',''),
+                    item_title, 'Sound', language, local_identifier, field_val, description, origin_information, extent,
+                    physical_location, shelf_locator, location_url
+                ]
+                writer.writerow(image_row)
+                continue
 
-                mime = source2_row['MIMEType']
-                model, resource_type = get_model_and_resource_type(mime)
-                digital_file = f"repo-ingest://archives/{source2_row['FileName']}"
+            if direct_image:
+                sf_base = direct_image.get('SourceFile', '')
+                sf_base_title = os.path.splitext(os.path.basename(sf_base))[0] if sf_base else ""
+                item_title = f"{title} - {sf_base_title}" if sf_base_title else title
+                image_row = [
+                    source1_id, member_of_existing_entity_id, '', 'Image',
+                    f"repo-ingest://archives/{direct_image.get('FileName', direct_image.get('SourceFile',''))}", direct_image.get('MIMEType',''),
+                    item_title, 'Image', language, local_identifier, field_val, description, origin_information, extent,
+                    physical_location, phys_obj_loc, location_url
+                ]
+                writer.writerow(image_row)
+                continue
 
-                if parent_id and parent_id in collections_by_id:
-                    member_of = parent_id
-                    member_of_existing_entity_id_val = ""
-                else:
-                    member_of = ""
-                    member_of_existing_entity_id_val = member_of_existing_entity_id
-
-            out_row = [
-                legacy_id,
-                member_of_existing_entity_id_val,
-                member_of,
-                model,
-                digital_file,
-                mime,
-                title,
-                resource_type,
-                language,
-                local_identifier,
-                field_val,
-                description,
-                origin_information,
-                extent,
-                physical_location,
-                shelf_locator
+            # No direct match: write a normal row without digital_file
+            image_row = [
+                source1_id, member_of_existing_entity_id, '', 'Image',
+                '', '', title, 'Image', language, local_identifier, field_val, description, origin_information, extent,
+                physical_location, phys_obj_loc, location_url
             ]
-            blank_fields = [header[i] for i, val in enumerate(out_row) if val == ""]
-            if blank_fields:
-                blank_rows.append({'rownum': idx+2, 'fields': blank_fields, 'values': out_row})
+            writer.writerow(image_row)
 
-            writer.writerow(out_row)
-
+    # Write error/blank report if necessary (error_rows and blank_rows collected earlier if desired)
     write_error_report(error_rows, blank_rows, error_path, header)
-    
+
 def pad_photo_number(num, width=3):
     try:
         return str(int(num)).zfill(width)
@@ -562,7 +729,7 @@ def write_missing_metadata_report(product_path, source2_path, report_path):
     with open(product_path, newline='', encoding='utf-8') as pf:
         reader = csv.DictReader(pf)
         for row in reader:
-            digital_file = row.get("digital_file", "")
+            digital_file = row.get("digital_file", "") or row.get("digitalFile", "") or row.get("digital-file", "")
             # Extract filename (after last /)
             if digital_file:
                 filename = digital_file.split("/")[-1]
